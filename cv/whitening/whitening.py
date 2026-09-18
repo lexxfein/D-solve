@@ -1,5 +1,4 @@
 import cv2
-from kiwisolver import strength
 import numpy as np
 import mediapipe as mp
 from pathlib import Path

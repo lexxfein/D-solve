@@ -8,7 +8,7 @@ from veneer import veneer_smile, export_teeth_svg
 HERE = Path(__file__).resolve()
 CV_DIR = HERE.parents[1]
 
-INPUT = CV_DIR / "samples" / "input11.jpg"
+INPUT = CV_DIR / "samples" / "input10.jpg"
 OUT = CV_DIR / "samples"
 OUT.mkdir(parents=True, exist_ok=True)
 
