@@ -1,99 +1,63 @@
-# Digital Smile Design — Integrated Project
+# D-Solve — Digital Smile Design
 
-This folder combines the **Dentaform TypeScript/React frontend** with the team's
-**computer-vision modules** and a small FastAPI bridge.
+D-Solve contains the original 2D smile-design CV workflow plus a separate 3D dental-model alignment workflow.
 
-## Architecture
+## 2D workflow
 
-Browser (React + TypeScript)
-        |
-        | POST /api/simulate (multipart/form-data)
-        v
-FastAPI backend
-        |
-        +--> cv/whitening/whitening.py
-        +--> cv/alignment/alignment.py
-        +--> cv/veneer/veneer.py
-        |
-        v
-JPEG result -> browser
+- Whitening remains on the existing OpenCV/MediaPipe pipeline.
+- Veneers remains on the existing veneer pipeline.
+- The 2D Alignment option has been removed from the treatment UI so alignment is handled only in the 3D workflow.
 
-## Project structure
+## 3D alignment
 
-- `frontend/` — Dentaform React + TypeScript + Vite UI
-- `backend/main.py` — API adapter between frontend and CV code
-- `backend/requirements.txt` — Python dependencies
-- `cv/` — original team's MediaPipe/OpenCV processing code
-- `frontend/src/api.ts` — frontend API client
-- `frontend/src/pages/NewDesignPage.tsx` — upload, treatment selection, intensity and before/after UI
+The **3D Alignment** tab accepts `.glb`, `.gltf`, `.obj`, and `.stl` models. The backend:
 
-## Run it
+1. Reads the uploaded mesh/scene with `trimesh`.
+2. Reports mesh, vertex and face counts.
+3. Applies a smooth dental-arch normalization to the fused scan.
+4. Allows manual rigid translation, rotation and scale.
+5. Exports the transformed result as a GLB.
 
-### 1. Backend
+The automatic operation now applies a **visible, conservative dental-arch normalization** to the fused scan. It smoothly adjusts lateral arch spacing, upper/lower arch height, and tooth-band depth instead of relying on PCA alone (which can be nearly a no-op for an already-upright scan). It does not independently reposition segmented teeth and is intended for visual design alignment, not clinical prediction. Tooth-by-tooth movement requires separate tooth objects or a dedicated tooth-segmentation/modeling stage.
+
+A copy of the supplied test model is included at `sample_models/teeth 3d model.glb`.
+
+## Run locally
+
+### Backend
 
 From the project root:
 
-```bash
-python -m venv .venv
+```powershell
+.\.venv\Scripts\Activate.ps1
+pip install -r backend\requirements.txt
+python -m uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-Windows:
+### Frontend
 
-```bash
-.venv\Scripts\activate
-pip install -r backend/requirements.txt
-uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000
-```
+Open a second PowerShell in `frontend`:
 
-The API should be available at `http://127.0.0.1:8000`.
-
-Health check:
-
-```text
-GET http://127.0.0.1:8000/api/health
-```
-
-### 2. Frontend
-
-Open another terminal:
-
-```bash
-cd frontend
+```powershell
 npm install
 npm run dev
 ```
 
-Open the Vite URL shown in the terminal, normally `http://localhost:5173`.
+If an older copy of the frontend has already created `node_modules` or a lockfile, use a clean install:
 
-The frontend already defaults to the backend URL above. If needed, copy
-`frontend/.env.example` to `frontend/.env` and change `VITE_API_BASE_URL`.
+```powershell
+Remove-Item -Recurse -Force node_modules
+Remove-Item -Force package-lock.json -ErrorAction SilentlyContinue
+npm install
+npm run dev
+```
 
-## Treatment API
+React is pinned to `19.2.8` because the selected Three.js integration requires a React 19 version below 19.3.
 
-`POST /api/simulate`
+## API
 
-Form fields:
-
-- `file`: image file
-- `treatment`: `whitening`, `alignment`, `veneers`, or `combined`
-- `intensity`: integer from 0–100
-
-The response is a JPEG image.
-
-## Compatibility status
-
-Before integration, the two supplied projects were **not directly compatible**:
-
-1. The Dentaform frontend only created a local browser preview and explicitly had no backend connection.
-2. The supplied `D-Solve/backend/` Python adapter files were empty.
-3. The supplied `D-Solve/frontend/` files were empty and therefore were not a usable bridge.
-4. The CV code exposed Python functions (`whiten_smile`, `align_smile`, `veneer_smile`) but the TypeScript frontend cannot call Python functions directly from the browser.
-
-The integration fixes this by adding the FastAPI HTTP boundary and wiring the existing
-TypeScript UI to it.
-
-## Important note
-
-The CV code supplied by the team is preserved rather than rewritten. The backend is
-an adapter layer around it. The visual output should be treated as a simulation for
-communication, not as a clinical prediction.
+- `GET /api/health`
+- `POST /api/simulate` — 2D whitening/veneers/combined
+- `POST /api/alignment/info` — inspect a 3D model
+- `POST /api/alignment/auto` — automatic geometric alignment
+- `POST /api/alignment/transform` — manual rigid transform + scale

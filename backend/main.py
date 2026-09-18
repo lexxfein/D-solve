@@ -1,6 +1,5 @@
 from pathlib import Path
-import base64
-import io
+import json
 import sys
 
 import cv2
@@ -13,14 +12,15 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from cv.alignment.alignment import align_smile
+from cv.alignment.alignment import align_smile  # kept for the existing 2D CV module/tests
+from cv.alignment.alignment3d import auto_align, inspect_model, manual_transform
 from cv.veneer.veneer import veneer_smile
 from cv.whitening.whitening import whiten_smile
 
 app = FastAPI(
     title="Digital Smile Design API",
-    version="1.0.0",
-    description="Bridge between the TypeScript frontend and the team's computer-vision pipeline.",
+    version="2.0.0",
+    description="Local backend for the D-Solve 2D smile simulation and 3D dental-model alignment workflows.",
 )
 
 app.add_middleware(
@@ -31,28 +31,43 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-ALLOWED = {"alignment", "whitening", "veneers", "combined"}
+ALLOWED_2D = {"whitening", "veneers", "combined"}
+
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "service": "digital-smile-design"}
+    return {"status": "ok", "service": "digital-smile-design", "three_d_alignment": True}
+
+
+async def read_bytes(file: UploadFile, *, max_mb: int = 80) -> bytes:
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+    if len(data) > max_mb * 1024 * 1024:
+        raise HTTPException(status_code=400, detail=f"File must be smaller than {max_mb} MB.")
+    return data
+
 
 async def decode_image(file: UploadFile) -> np.ndarray:
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="Please upload a valid image.")
-    data = await file.read()
-    if not data:
-        raise HTTPException(status_code=400, detail="Uploaded image is empty.")
+    data = await read_bytes(file, max_mb=10)
     image = cv2.imdecode(np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_COLOR)
     if image is None:
         raise HTTPException(status_code=400, detail="The image could not be decoded.")
     return image
+
 
 def encode_jpeg(image: np.ndarray) -> bytes:
     ok, encoded = cv2.imencode(".jpg", image, [int(cv2.IMWRITE_JPEG_QUALITY), 92])
     if not ok:
         raise HTTPException(status_code=500, detail="Could not encode processed image.")
     return encoded.tobytes()
+
+
+def model_filename(file: UploadFile) -> str:
+    return file.filename or "model.glb"
+
 
 @app.post("/api/simulate")
 async def simulate(
@@ -61,25 +76,27 @@ async def simulate(
     intensity: int = Form(50),
 ):
     treatment = treatment.lower().strip()
-    if treatment not in ALLOWED:
+    if treatment == "alignment":
         raise HTTPException(
             status_code=400,
-            detail=f"Unsupported treatment. Use one of: {', '.join(sorted(ALLOWED))}",
+            detail="2D alignment has been moved to the 3D Alignment workflow. Upload a dental 3D model there.",
+        )
+    if treatment not in ALLOWED_2D:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported 2D treatment. Use one of: {', '.join(sorted(ALLOWED_2D))}",
         )
     intensity = max(0, min(100, int(intensity)))
     image = await decode_image(file)
 
     try:
-        if treatment == "alignment":
-            result = align_smile(image, intensity)
-        elif treatment == "whitening":
+        if treatment == "whitening":
             result = whiten_smile(image, intensity)
         elif treatment == "veneers":
             result = veneer_smile(image, intensity)
         else:
-            # Combined demo pipeline: whitening -> alignment -> veneers.
+            # Keep the existing 2D workflows while removing alignment from this path.
             result = whiten_smile(image, intensity)
-            result = align_smile(result, intensity)
             result = veneer_smile(result, intensity)
     except Exception as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -91,4 +108,68 @@ async def simulate(
             "X-Treatment": treatment,
             "X-Intensity": str(intensity),
         },
+    )
+
+
+@app.post("/api/alignment/info")
+async def alignment_info(file: UploadFile = File(...)):
+    data = await read_bytes(file)
+    try:
+        info = inspect_model(data, model_filename(file))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return info.__dict__
+
+
+@app.post("/api/alignment/auto")
+async def alignment_auto(
+    file: UploadFile = File(...),
+    strength: float = Form(100),
+):
+    data = await read_bytes(file)
+    strength = max(0.0, min(100.0, float(strength)))
+    try:
+        output, transform = auto_align(data, model_filename(file), strength)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return Response(
+        content=output,
+        media_type="model/gltf-binary",
+        headers={
+            "Content-Disposition": 'attachment; filename="dsolve_auto_aligned.glb"',
+            "X-Alignment-Transform": json.dumps(transform),
+        },
+    )
+
+
+@app.post("/api/alignment/transform")
+async def alignment_transform(
+    file: UploadFile = File(...),
+    tx: float = Form(0),
+    ty: float = Form(0),
+    tz: float = Form(0),
+    rx: float = Form(0),
+    ry: float = Form(0),
+    rz: float = Form(0),
+    scale: float = Form(1),
+):
+    data = await read_bytes(file)
+    try:
+        output = manual_transform(
+            data,
+            model_filename(file),
+            tx=float(tx),
+            ty=float(ty),
+            tz=float(tz),
+            rx=float(rx),
+            ry=float(ry),
+            rz=float(rz),
+            scale=float(scale),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return Response(
+        content=output,
+        media_type="model/gltf-binary",
+        headers={"Content-Disposition": 'attachment; filename="dsolve_aligned.glb"'},
     )
