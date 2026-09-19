@@ -1,5 +1,5 @@
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
-import { FileText, LayoutDashboard, Plus, Settings, Smile, Users, Menu, X } from "lucide-react";
+import { Activity, FileText, LayoutDashboard, Plus, Settings, Smile, Users, Menu, X } from "lucide-react";
 import { useState } from "react";
 
 const items = [
